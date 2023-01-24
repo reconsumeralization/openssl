@@ -59,7 +59,7 @@ struct hmac_data_st {
     size_t tls_mac_out_size;
 };
 
-/* Defined in ssl/s3_cbc.c */
+/* Defined in ssl/record/methods/ssl3_cbc.c */
 int ssl3_cbc_digest_record(const EVP_MD *md,
                            unsigned char *md_out,
                            size_t *md_out_size,
@@ -115,6 +115,7 @@ static void *hmac_dup(void *vsrc)
     *dst = *src;
     dst->ctx = ctx;
     dst->key = NULL;
+    memset(&dst->digest, 0, sizeof(dst->digest));
 
     if (!HMAC_CTX_copy(dst->ctx, src->ctx)
         || !ossl_prov_digest_copy(&dst->digest, &src->digest)) {

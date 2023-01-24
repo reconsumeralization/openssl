@@ -339,9 +339,16 @@ int EVP_PKEY_eq(const EVP_PKEY *a, const EVP_PKEY *b)
     if (a == NULL || b == NULL)
         return 0;
 
-    if (a->keymgmt != NULL || b->keymgmt != NULL)
-        return evp_pkey_cmp_any(a, b, (SELECT_PARAMETERS
-                                       | OSSL_KEYMGMT_SELECT_KEYPAIR));
+    if (a->keymgmt != NULL || b->keymgmt != NULL) {
+        int selection = SELECT_PARAMETERS;
+
+        if (evp_keymgmt_util_has((EVP_PKEY *)a, OSSL_KEYMGMT_SELECT_PUBLIC_KEY)
+            && evp_keymgmt_util_has((EVP_PKEY *)b, OSSL_KEYMGMT_SELECT_PUBLIC_KEY))
+            selection |= OSSL_KEYMGMT_SELECT_PUBLIC_KEY;
+        else
+            selection |= OSSL_KEYMGMT_SELECT_KEYPAIR;
+        return evp_pkey_cmp_any(a, b, selection);
+    }
 
     /* All legacy keys */
     if (a->type != b->type)
@@ -435,12 +442,12 @@ static EVP_PKEY *new_raw_key_int(OSSL_LIB_CTX *libctx,
 
     pkey = EVP_PKEY_new();
     if (pkey == NULL) {
-        ERR_raise(ERR_LIB_EVP, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_EVP, ERR_R_EVP_LIB);
         goto err;
     }
 
     if (!pkey_set_type(pkey, e, nidtype, strtype, -1, NULL)) {
-        /* EVPerr already called */
+        /* ERR_raise(ERR_LIB_EVP, ...) already called */
         goto err;
     }
 
@@ -1039,11 +1046,10 @@ const char *evp_pkey_type2name(int type)
 
 int EVP_PKEY_is_a(const EVP_PKEY *pkey, const char *name)
 {
-    if (pkey->keymgmt == NULL) {
-        int type = evp_pkey_name2type(name);
-
-        return pkey->type == type;
-    }
+    if (pkey == NULL)
+        return 0;
+    if (pkey->keymgmt == NULL)
+        return pkey->type == evp_pkey_name2type(name);
     return EVP_KEYMGMT_is_a(pkey->keymgmt, name);
 }
 
@@ -1123,8 +1129,11 @@ static int print_set_indent(BIO **out, int *pop_f_prefix, long *saved_indent,
 
         *saved_indent =  (i < 0 ? 0 : i);
         if (BIO_set_indent(*out, indent) <= 0) {
-            if ((*out = BIO_push(BIO_new(BIO_f_prefix()), *out)) == NULL)
+            BIO *prefbio = BIO_new(BIO_f_prefix());
+
+            if (prefbio == NULL)
                 return 0;
+            *out = BIO_push(prefbio, *out);
             *pop_f_prefix = 1;
         }
         if (BIO_set_indent(*out, indent) <= 0) {
@@ -1386,6 +1395,7 @@ size_t EVP_PKEY_get1_encoded_public_key(EVP_PKEY *pkey, unsigned char **ppub)
 
     if (pkey != NULL && evp_pkey_is_provided(pkey)) {
         size_t return_size = OSSL_PARAM_UNMODIFIED;
+        unsigned char *buf;
 
         /*
          * We know that this is going to fail, but it will give us a size
@@ -1397,14 +1407,18 @@ size_t EVP_PKEY_get1_encoded_public_key(EVP_PKEY *pkey, unsigned char **ppub)
         if (return_size == OSSL_PARAM_UNMODIFIED)
             return 0;
 
-        *ppub = OPENSSL_malloc(return_size);
-        if (*ppub == NULL)
+        *ppub = NULL;
+        buf = OPENSSL_malloc(return_size);
+        if (buf == NULL)
             return 0;
 
         if (!EVP_PKEY_get_octet_string_param(pkey,
                                              OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY,
-                                             *ppub, return_size, NULL))
+                                             buf, return_size, NULL)) {
+            OPENSSL_free(buf);
             return 0;
+        }
+        *ppub = buf;
         return return_size;
     }
 
@@ -1423,10 +1437,8 @@ EVP_PKEY *EVP_PKEY_new(void)
 {
     EVP_PKEY *ret = OPENSSL_zalloc(sizeof(*ret));
 
-    if (ret == NULL) {
-        ERR_raise(ERR_LIB_EVP, ERR_R_MALLOC_FAILURE);
+    if (ret == NULL)
         return NULL;
-    }
 
     ret->type = EVP_PKEY_NONE;
     ret->save_type = EVP_PKEY_NONE;
@@ -1434,14 +1446,14 @@ EVP_PKEY *EVP_PKEY_new(void)
 
     ret->lock = CRYPTO_THREAD_lock_new();
     if (ret->lock == NULL) {
-        EVPerr(ERR_LIB_EVP, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_EVP, ERR_R_CRYPTO_LIB);
         goto err;
     }
 
 #ifndef FIPS_MODULE
     ret->save_parameters = 1;
     if (!CRYPTO_new_ex_data(CRYPTO_EX_INDEX_EVP_PKEY, ret, &ret->ex_data)) {
-        ERR_raise(ERR_LIB_EVP, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_EVP, ERR_R_CRYPTO_LIB);
         goto err;
     }
 #endif
@@ -1810,6 +1822,7 @@ void *evp_pkey_export_to_provider(EVP_PKEY *pk, OSSL_LIB_CTX *libctx,
 {
     EVP_KEYMGMT *allocated_keymgmt = NULL;
     EVP_KEYMGMT *tmp_keymgmt = NULL;
+    int selection = OSSL_KEYMGMT_SELECT_ALL;
     void *keydata = NULL;
     int check;
 
@@ -1850,7 +1863,7 @@ void *evp_pkey_export_to_provider(EVP_PKEY *pk, OSSL_LIB_CTX *libctx,
 
         if (ctx == NULL)
             goto end;
-        tmp_keymgmt = ctx->keymgmt;
+        allocated_keymgmt = tmp_keymgmt = ctx->keymgmt;
         ctx->keymgmt = NULL;
         EVP_PKEY_CTX_free(ctx);
     }
@@ -1871,7 +1884,8 @@ void *evp_pkey_export_to_provider(EVP_PKEY *pk, OSSL_LIB_CTX *libctx,
         if (pk->ameth->dirty_cnt(pk) == pk->dirty_cnt_copy) {
             if (!CRYPTO_THREAD_read_lock(pk->lock))
                 goto end;
-            op = evp_keymgmt_util_find_operation_cache(pk, tmp_keymgmt);
+            op = evp_keymgmt_util_find_operation_cache(pk, tmp_keymgmt,
+                                                       selection);
 
             /*
              * If |tmp_keymgmt| is present in the operation cache, it means
@@ -1926,7 +1940,7 @@ void *evp_pkey_export_to_provider(EVP_PKEY *pk, OSSL_LIB_CTX *libctx,
         EVP_KEYMGMT_free(tmp_keymgmt); /* refcnt-- */
 
         /* Check to make sure some other thread didn't get there first */
-        op = evp_keymgmt_util_find_operation_cache(pk, tmp_keymgmt);
+        op = evp_keymgmt_util_find_operation_cache(pk, tmp_keymgmt, selection);
         if (op != NULL && op->keymgmt != NULL) {
             void *tmp_keydata = op->keydata;
 
@@ -1937,7 +1951,8 @@ void *evp_pkey_export_to_provider(EVP_PKEY *pk, OSSL_LIB_CTX *libctx,
         }
 
         /* Add the new export to the operation cache */
-        if (!evp_keymgmt_util_cache_keydata(pk, tmp_keymgmt, keydata)) {
+        if (!evp_keymgmt_util_cache_keydata(pk, tmp_keymgmt, keydata,
+                                            selection)) {
             CRYPTO_THREAD_unlock(pk->lock);
             evp_keymgmt_freedata(tmp_keymgmt, keydata);
             keydata = NULL;
@@ -1952,7 +1967,7 @@ void *evp_pkey_export_to_provider(EVP_PKEY *pk, OSSL_LIB_CTX *libctx,
     }
 #endif  /* FIPS_MODULE */
 
-    keydata = evp_keymgmt_util_export_to_provider(pk, tmp_keymgmt);
+    keydata = evp_keymgmt_util_export_to_provider(pk, tmp_keymgmt, selection);
 
  end:
     /*
@@ -1963,8 +1978,10 @@ void *evp_pkey_export_to_provider(EVP_PKEY *pk, OSSL_LIB_CTX *libctx,
     if (keydata == NULL)
         tmp_keymgmt = NULL;
 
-    if (keymgmt != NULL)
+    if (keymgmt != NULL && tmp_keymgmt != NULL) {
         *keymgmt = tmp_keymgmt;
+        allocated_keymgmt = NULL;
+    }
 
     EVP_KEYMGMT_free(allocated_keymgmt);
     return keydata;
@@ -1973,6 +1990,8 @@ void *evp_pkey_export_to_provider(EVP_PKEY *pk, OSSL_LIB_CTX *libctx,
 #ifndef FIPS_MODULE
 int evp_pkey_copy_downgraded(EVP_PKEY **dest, const EVP_PKEY *src)
 {
+    EVP_PKEY *allocpkey = NULL;
+
     if (!ossl_assert(dest != NULL))
         return 0;
 
@@ -2003,9 +2022,9 @@ int evp_pkey_copy_downgraded(EVP_PKEY **dest, const EVP_PKEY *src)
 
         /* Make sure we have a clean slate to copy into */
         if (*dest == NULL) {
-            *dest = EVP_PKEY_new();
+            allocpkey = *dest = EVP_PKEY_new();
             if (*dest == NULL) {
-                ERR_raise(ERR_LIB_EVP, ERR_R_MALLOC_FAILURE);
+                ERR_raise(ERR_LIB_EVP, ERR_R_EVP_LIB);
                 return 0;
             }
         } else {
@@ -2031,7 +2050,7 @@ int evp_pkey_copy_downgraded(EVP_PKEY **dest, const EVP_PKEY *src)
                     EVP_PKEY_CTX_new_from_pkey(libctx, *dest, NULL);
 
                 if (pctx == NULL)
-                    ERR_raise(ERR_LIB_EVP, ERR_R_MALLOC_FAILURE);
+                    ERR_raise(ERR_LIB_EVP, ERR_R_EVP_LIB);
 
                 if (pctx != NULL
                     && evp_keymgmt_export(keymgmt, keydata,
@@ -2052,6 +2071,10 @@ int evp_pkey_copy_downgraded(EVP_PKEY **dest, const EVP_PKEY *src)
         }
     }
 
+    if (allocpkey != NULL) {
+        EVP_PKEY_free(allocpkey);
+        *dest = NULL;
+    }
     return 0;
 }
 
@@ -2084,7 +2107,7 @@ void *evp_pkey_get_legacy(EVP_PKEY *pk)
         return ret;
 
     if (!evp_pkey_copy_downgraded(&tmp_copy, pk))
-        return NULL;
+        goto err;
 
     if (!CRYPTO_THREAD_write_lock(pk->lock))
         goto err;

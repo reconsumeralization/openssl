@@ -230,6 +230,30 @@ __owur static ossl_inline int PACKET_peek_net_4(const PACKET *pkt,
 }
 
 /*
+ * Peek ahead at 8 bytes in network order from |pkt| and store the value in
+ * |*data|
+ */
+__owur static ossl_inline int PACKET_peek_net_8(const PACKET *pkt,
+                                                uint64_t *data)
+{
+    if (PACKET_remaining(pkt) < 8)
+        return 0;
+
+    *data = ((uint64_t)(*pkt->curr)) << 56;
+    *data |= ((uint64_t)(*(pkt->curr + 1))) << 48;
+    *data |= ((uint64_t)(*(pkt->curr + 2))) << 40;
+    *data |= ((uint64_t)(*(pkt->curr + 3))) << 32;
+    *data |= ((uint64_t)(*(pkt->curr + 4))) << 24;
+    *data |= ((uint64_t)(*(pkt->curr + 5))) << 16;
+    *data |= ((uint64_t)(*(pkt->curr + 6))) << 8;
+    *data |= *(pkt->curr + 7);
+
+    return 1;
+}
+
+# ifndef OPENSSL_NO_QUIC
+
+/*
  * Decodes a QUIC variable-length integer in |pkt| and stores the result in
  * |data|.
  */
@@ -250,6 +274,49 @@ __owur static ossl_inline int PACKET_get_quic_vlint(PACKET *pkt,
     packet_forward(pkt, enclen);
     return 1;
 }
+
+/*
+ * Decodes a QUIC variable-length integer in |pkt| and stores the result in
+ * |data|. Unlike PACKET_get_quic_vlint, this does not advance the current
+ * position.
+ */
+__owur static ossl_inline int PACKET_peek_quic_vlint(PACKET *pkt,
+                                                     uint64_t *data)
+{
+    size_t enclen;
+
+    if (PACKET_remaining(pkt) < 1)
+        return 0;
+
+    enclen = ossl_quic_vlint_decode_len(*pkt->curr);
+
+    if (PACKET_remaining(pkt) < enclen)
+        return 0;
+
+    *data = ossl_quic_vlint_decode_unchecked(pkt->curr);
+    return 1;
+}
+
+/*
+ * Skips over a QUIC variable-length integer in |pkt| without decoding it.
+ */
+__owur static ossl_inline int PACKET_skip_quic_vlint(PACKET *pkt)
+{
+    size_t enclen;
+
+    if (PACKET_remaining(pkt) < 1)
+        return 0;
+
+    enclen = ossl_quic_vlint_decode_len(*pkt->curr);
+
+    if (PACKET_remaining(pkt) < enclen)
+        return 0;
+
+    packet_forward(pkt, enclen);
+    return 1;
+}
+
+# endif
 
 /* Equivalent of n2l */
 /* Get 4 bytes in network order from |pkt| and store the value in |*data| */
@@ -273,6 +340,17 @@ __owur static ossl_inline int PACKET_get_net_4_len(PACKET *pkt, size_t *data)
         *data = (size_t)i;
 
     return ret;
+}
+
+/* Get 8 bytes in network order from |pkt| and store the value in |*data| */
+__owur static ossl_inline int PACKET_get_net_8(PACKET *pkt, uint64_t *data)
+{
+    if (!PACKET_peek_net_8(pkt, data))
+        return 0;
+
+    packet_forward(pkt, 8);
+
+    return 1;
 }
 
 /* Peek ahead at 1 byte from |pkt| and store the value in |*data| */
@@ -617,6 +695,8 @@ __owur static ossl_inline int PACKET_get_length_prefixed_3(PACKET *pkt,
     return 1;
 }
 
+# ifndef OPENSSL_NO_QUIC
+
 /*
  * Reads a variable-length vector prefixed with a QUIC variable-length integer
  * denoting the length, and stores the contents in |subpkt|. |pkt| can equal
@@ -643,6 +723,8 @@ __owur static ossl_inline int PACKET_get_quic_length_prefixed(PACKET *pkt,
 
     return 1;
 }
+
+# endif
 
 /* Writeable packets */
 
@@ -885,7 +967,7 @@ int WPACKET_sub_reserve_bytes__(WPACKET *pkt, size_t len,
  * 1 byte will fail. Don't call this directly. Use the convenience macros below
  * instead.
  */
-int WPACKET_put_bytes__(WPACKET *pkt, unsigned int val, size_t bytes);
+int WPACKET_put_bytes__(WPACKET *pkt, uint64_t val, size_t bytes);
 
 /*
  * Convenience macros for calling WPACKET_put_bytes with different
@@ -899,6 +981,8 @@ int WPACKET_put_bytes__(WPACKET *pkt, unsigned int val, size_t bytes);
     WPACKET_put_bytes__((pkt), (val), 3)
 #define WPACKET_put_bytes_u32(pkt, val) \
     WPACKET_put_bytes__((pkt), (val), 4)
+#define WPACKET_put_bytes_u64(pkt, val) \
+    WPACKET_put_bytes__((pkt), (val), 8)
 
 /* Set a maximum size that we will not allow the WPACKET to grow beyond */
 int WPACKET_set_max_size(WPACKET *pkt, size_t maxsize);
@@ -951,6 +1035,8 @@ int WPACKET_is_null_buf(WPACKET *pkt);
 /* Release resources in a WPACKET if a failure has occurred. */
 void WPACKET_cleanup(WPACKET *pkt);
 
+# ifndef OPENSSL_NO_QUIC
+
 /*
  * Starts a QUIC sub-packet headed by a QUIC variable-length integer. A 4-byte
  * representation is used.
@@ -979,5 +1065,7 @@ __owur int WPACKET_quic_sub_allocate_bytes(WPACKET *pkt, size_t len,
  * Write a QUIC variable-length integer to the packet.
  */
 __owur int WPACKET_quic_write_vlint(WPACKET *pkt, uint64_t v);
+
+# endif
 
 #endif                          /* OSSL_INTERNAL_PACKET_H */

@@ -148,7 +148,7 @@ int dsaparam_main(int argc, char **argv)
     if (out == NULL)
         goto end;
 
-    ctx = EVP_PKEY_CTX_new_from_name(NULL, "DSA", NULL);
+    ctx = EVP_PKEY_CTX_new_from_name(app_get0_libctx(), "DSA", app_get0_propq());
     if (ctx == NULL) {
         BIO_printf(bio_err,
                    "Error, DSA parameter generation context allocation failed\n");
@@ -173,7 +173,7 @@ int dsaparam_main(int argc, char **argv)
                        "Error, DSA key generation paramgen init failed\n");
             goto end;
         }
-        if (!EVP_PKEY_CTX_set_dsa_paramgen_bits(ctx, num)) {
+        if (EVP_PKEY_CTX_set_dsa_paramgen_bits(ctx, num) <= 0) {
             BIO_printf(bio_err,
                        "Error, DSA key generation setting bit length failed\n");
             goto end;
@@ -206,7 +206,8 @@ int dsaparam_main(int argc, char **argv)
     }
     if (genkey) {
         EVP_PKEY_CTX_free(ctx);
-        ctx = EVP_PKEY_CTX_new(params, NULL);
+        ctx = EVP_PKEY_CTX_new_from_pkey(app_get0_libctx(), params,
+                app_get0_propq());
         if (ctx == NULL) {
             BIO_printf(bio_err,
                        "Error, DSA key generation context allocation failed\n");

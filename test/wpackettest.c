@@ -26,6 +26,8 @@ static const unsigned char simpleder[] = {
     0xfc, 0x04, 0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xfd
 };
 
+#ifndef OPENSSL_NO_QUIC
+
 /* QUIC sub-packet with 4-byte length prefix, containing a 1-byte vlint */
 static const unsigned char quic1[] = { 0x80, 0x00, 0x00, 0x01, 0x09 };
 /* QUIC sub-packet with 1-byte length prefix, containing a 1-byte vlint */
@@ -49,6 +51,8 @@ static const unsigned char quic7[] = {
     0x07, 0x80, 0x00, 0x00, 0x08, 0x65, 0x14, 0x40, 0x01, 0x05,
     0x40, 0x01, 0x11, 0x40, 0x01, 0x12, 0x40, 0x01, 0x13
 };
+
+#endif
 
 static BUF_MEM *buf;
 
@@ -410,7 +414,7 @@ static int test_WPACKET_init_der(void)
         return cleanup(&pkt);
 
     /* Generate random packet data for test */
-    if (!TEST_true(RAND_bytes(&testdata2[3], sizeof(testdata2) - 3)))
+    if (!TEST_int_gt(RAND_bytes(&testdata2[3], sizeof(testdata2) - 3), 0))
         return 0;
 
     /*
@@ -447,6 +451,8 @@ static int test_WPACKET_init_der(void)
 
     return 1;
 }
+
+#ifndef OPENSSL_NO_QUIC
 
 static int test_WPACKET_quic(void)
 {
@@ -581,7 +587,7 @@ static int test_WPACKET_quic_vlint_random(void)
     PACKET read_pkt = {0};
 
     for (i = 0; i < 10000; ++i) {
-        if (!TEST_true(RAND_bytes(rand_data, sizeof(rand_data))))
+        if (!TEST_int_gt(RAND_bytes(rand_data, sizeof(rand_data)), 0))
             return cleanup(&pkt);
 
         expected = *(uint64_t*)rand_data;
@@ -621,6 +627,8 @@ static int test_WPACKET_quic_vlint_random(void)
     return 1;
 }
 
+#endif
+
 int setup_tests(void)
 {
     if (!TEST_ptr(buf = BUF_MEM_new()))
@@ -633,8 +641,10 @@ int setup_tests(void)
     ADD_TEST(test_WPACKET_allocate_bytes);
     ADD_TEST(test_WPACKET_memcpy);
     ADD_TEST(test_WPACKET_init_der);
+#ifndef OPENSSL_NO_QUIC
     ADD_TEST(test_WPACKET_quic);
     ADD_TEST(test_WPACKET_quic_vlint_random);
+#endif
     return 1;
 }
 

@@ -64,6 +64,7 @@ Server authentication options:
 [B<-expect_sender> I<name>]
 [B<-ignore_keyusage>]
 [B<-unprotected_errors>]
+[B<-srvcertout> I<filename>]
 [B<-extracertsout> I<filename>]
 [B<-cacertsout> I<filename>]
 
@@ -267,11 +268,11 @@ L<openssl-passphrase-options(1)>.
 
 X509 Distinguished Name (DN) of subject to use in the requested certificate
 template.
-For KUR, it defaults to the public key
-in the PKCS#10 CSR given with the B<-csr> option, if provided,
-or of the reference certificate (see B<-oldcert>) if provided.
-This default is used for IR and CR only if no SANs are set.
-If the NULL-DN (C<"/">) is given then no subject is placed in the template.
+If the NULL-DN (C</>) is given then no subject is placed in the template.
+Default is the subject DN of any PKCS#10 CSR given with the B<-csr> option.
+For KUR, a further fallback is the subject DN
+of the reference certificate (see B<-oldcert>) if provided.
+This fallback is used for IR and CR only if no SANs are set.
 
 If provided and neither of B<-cert>, B<-oldcert>, or B<-csr> is given,
 the subject DN is used as fallback sender of outgoing CMP messages.
@@ -290,7 +291,7 @@ C</DC=org/DC=OpenSSL/DC=users/UID=123456+CN=John Doe>
 
 X509 issuer Distinguished Name (DN) of the CA server
 to place in the requested certificate template in IR/CR/KUR.
-If the NULL-DN (C<"/">) is given then no issuer is placed in the template.
+If the NULL-DN (C</>) is given then no issuer is placed in the template.
 
 If provided and neither B<-recipient> nor B<-srvcert> is given,
 the issuer DN is used as fallback recipient of outgoing CMP messages.
@@ -356,8 +357,9 @@ is provided via the B<-newkey> or B<-key> options.
 
 PKCS#10 CSR in PEM or DER format containing a certificate request.
 With B<-cmd> I<p10cr> it is used directly in a legacy P10CR message.
-When used with B<-cmd> I<ir>, I<cr>, or I<kur>, it is transformed into the
-respective regular CMP request.
+When used with B<-cmd> I<ir>, I<cr>, or I<kur>,
+it is transformed into the respective regular CMP request,
+while its public key is ignored if I<-newkey> is given.
 It may also be used with B<-cmd> I<rr> to specify the certificate to be revoked
 via the included subject name and public key.
 Its subject is used as fallback sender in CMP message headers
@@ -388,11 +390,11 @@ B<WARNING:> This leads to behavior violating RFC 4210.
 
 =item B<-certout> I<filename>
 
-The file where the newly enrolled certificate should be saved.
+The file where any newly enrolled certificate should be saved.
 
 =item B<-chainout> I<filename>
 
-The file where the chain of the newly enrolled certificate should be saved.
+The file where the chain of any newly enrolled certificate should be saved.
 
 =back
 
@@ -506,15 +508,17 @@ The default value is 1, which means preferring to keep the connection open.
 
 =item B<-msg_timeout> I<seconds>
 
-Number of seconds (or 0 for infinite) a CMP request-response message round trip
+Number of seconds a CMP request-response message round trip
 is allowed to take before a timeout error is returned.
+A value <= 0 means no limitation (waiting indefinitely).
 Default is to use the B<-total_timeout> setting.
 
 =item B<-total_timeout> I<seconds>
 
-Maximum number seconds an overall enrollment transaction may take,
-including attempts polling for certificates on C<waiting> PKIStatus.
-Default is 0 (infinite).
+Maximum total number of seconds a transaction may take,
+including polling etc.
+A value <= 0 means no limitation (waiting indefinitely).
+Default is 0.
 
 =back
 
@@ -623,15 +627,22 @@ with a signature key."
 
 =back
 
+=item B<-srvcertout> I<filename>
+
+The file where to save the successfully validated certificate, if any,
+that the CMP server used for signature-based response message protection.
+If there is no such certificate, typically because the protection was MAC-based,
+this is indicated by deleting the file (if it existed).
+
 =item B<-extracertsout> I<filename>
 
-The file where to save all certificates contained in the extraCerts field
-of the last received response message (except for pollRep and PKIConf).
+The file where to save the list of certificates contained in the extraCerts
+field of the last received response message that is not a pollRep nor PKIConf.
 
 =item B<-cacertsout> I<filename>
 
-The file where to save any CA certificates contained in the caPubs field of
-the last received certificate response (i.e., IP, CP, or KUP) message.
+The file where to save the list of CA certificates contained in the caPubs field
+if a positive certificate response (i.e., IP, CP, or KUP) message was received.
 
 =back
 
@@ -1059,6 +1070,10 @@ In this case the client will reject them, and thus their contents are not shown
 although they usually contain hints that would be helpful for diagnostics.
 For assisting in such cases the CMP client offers a workaround via the
 B<-unprotected_errors> option, which allows accepting such negative messages.
+
+If OpenSSL was built with trace support enabled
+and the environment variable B<OPENSSL_TRACE> includes B<HTTP>,
+the request and response headers of HTTP transfers are printed.
 
 =head1 EXAMPLES
 

@@ -12,6 +12,7 @@
 #include <openssl/err.h>
 #include <openssl/decoder.h>
 #include "internal/sizes.h"
+#include "crypto/asn1.h"
 #include "crypto/evp.h"
 #include "cms_local.h"
 
@@ -48,7 +49,7 @@ static EVP_PKEY *pkey_type2param(int ptype, const void *pval,
         if (pctx == NULL || EVP_PKEY_paramgen_init(pctx) <= 0)
             goto err;
         if (OBJ_obj2txt(groupname, sizeof(groupname), poid, 0) <= 0
-                || !EVP_PKEY_CTX_set_group_name(pctx, groupname)) {
+                || EVP_PKEY_CTX_set_group_name(pctx, groupname) <= 0) {
             ERR_raise(ERR_LIB_CMS, CMS_R_DECODE_ERROR);
             goto err;
         }
@@ -277,8 +278,7 @@ static int ecdh_cms_encrypt(CMS_RecipientInfo *ri)
 
         penclen = EVP_PKEY_get1_encoded_public_key(pkey, &penc);
         ASN1_STRING_set0(pubkey, penc, penclen);
-        pubkey->flags &= ~(ASN1_STRING_FLAG_BITS_LEFT | 0x07);
-        pubkey->flags |= ASN1_STRING_FLAG_BITS_LEFT;
+        ossl_asn1_string_set_bits_left(pubkey, 0);
 
         penc = NULL;
         (void)X509_ALGOR_set0(talg, OBJ_nid2obj(NID_X9_62_id_ecPublicKey),
@@ -289,7 +289,7 @@ static int ecdh_cms_encrypt(CMS_RecipientInfo *ri)
     kdf_type = EVP_PKEY_CTX_get_ecdh_kdf_type(pctx);
     if (kdf_type <= 0)
         goto err;
-    if (!EVP_PKEY_CTX_get_ecdh_kdf_md(pctx, &kdf_md))
+    if (EVP_PKEY_CTX_get_ecdh_kdf_md(pctx, &kdf_md) <= 0)
         goto err;
     ecdh_nid = EVP_PKEY_CTX_get_ecdh_cofactor_mode(pctx);
     if (ecdh_nid < 0)

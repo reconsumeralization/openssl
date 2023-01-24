@@ -86,21 +86,22 @@ static int rsa_multiprime_keygen(RSA *rsa, int bits, int primes,
     int ok = -1;
 
     if (bits < RSA_MIN_MODULUS_BITS) {
-        ok = 0;             /* we set our own err */
         ERR_raise(ERR_LIB_RSA, RSA_R_KEY_SIZE_TOO_SMALL);
-        goto err;
+        return 0;
     }
-
+    if (e_value == NULL) {
+        ERR_raise(ERR_LIB_RSA, RSA_R_BAD_E_VALUE);
+        return 0;
+    }
     /* A bad value for e can cause infinite loops */
-    if (e_value != NULL && !ossl_rsa_check_public_exponent(e_value)) {
+    if (!ossl_rsa_check_public_exponent(e_value)) {
         ERR_raise(ERR_LIB_RSA, RSA_R_PUB_EXPONENT_OUT_OF_RANGE);
         return 0;
     }
 
     if (primes < RSA_DEFAULT_PRIME_NUM || primes > ossl_rsa_multip_cap(bits)) {
-        ok = 0;             /* we set our own err */
         ERR_raise(ERR_LIB_RSA, RSA_R_KEY_PRIME_NUM_INVALID);
-        goto err;
+        return 0;
     }
 
     ctx = BN_CTX_new_ex(rsa->libctx);
@@ -426,20 +427,22 @@ static int rsa_keygen(OSSL_LIB_CTX *libctx, RSA *rsa, int bits, int primes,
 {
     int ok = 0;
 
+#ifdef FIPS_MODULE
+    ok = ossl_rsa_sp800_56b_generate_key(rsa, bits, e_value, cb);
+    pairwise_test = 1; /* FIPS MODE needs to always run the pairwise test */
+#else
     /*
-     * Only multi-prime keys or insecure keys with a small key length will use
-     * the older rsa_multiprime_keygen().
+     * Only multi-prime keys or insecure keys with a small key length or a
+     * public exponent <= 2^16 will use the older rsa_multiprime_keygen().
      */
-    if (primes == 2 && bits >= 2048)
+    if (primes == 2
+            && bits >= 2048
+            && (e_value == NULL || BN_num_bits(e_value) > 16))
         ok = ossl_rsa_sp800_56b_generate_key(rsa, bits, e_value, cb);
-#ifndef FIPS_MODULE
     else
         ok = rsa_multiprime_keygen(rsa, bits, primes, e_value, cb);
 #endif /* FIPS_MODULE */
 
-#ifdef FIPS_MODULE
-    pairwise_test = 1; /* FIPS MODE needs to always run the pairwise test */
-#endif
     if (pairwise_test && ok > 0) {
         OSSL_CALLBACK *stcb = NULL;
         void *stcbarg = NULL;
